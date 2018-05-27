@@ -1,0 +1,207 @@
+--Ella Hayashi
+--V00184392
+--CSC 370 Assignment4
+
+
+drop table if exists enrolled;
+drop table if exists students;
+drop table if exists prerequisites;
+drop table if exists has;
+drop table if exists course_offerings;
+drop table if exists course;
+drop table if exists grades;
+
+drop function if exists duplicate_course();
+drop function if exists already_enrolled();
+drop function if exists capacity();
+drop function if exists prerequesites_have();
+drop function if exists duplicate_student();
+drop function if exists grade_Assigned();
+
+
+-----------------------
+-- Create the tables --
+-----------------------
+
+create table students( student_id varchar(50) not null,
+						name varchar(256) not null,
+                         primary key(student_id)
+						);
+create table course(course_code varchar(10) primary key not null
+					 );
+
+create table course_offerings(course_code varchar(10) not null,
+							 course_name varchar(130) not null,
+								term_code integer not null,
+								instructor_name varchar(150),
+								max_capacity integer,
+								primary key(course_code, term_code),
+								foreign key(course_code) references course(course_code)
+								on delete cascade
+								on update cascade,
+								check(max_capacity >= 1));
+							
+create table prerequisites(course_from varchar(10),
+							term_code integer,
+							course_reques_to varchar(10),	
+							primary key(term_code, course_from, course_reques_to),
+							foreign key(term_code, course_from) references course_offerings(term_code, course_code)
+							on delete restrict
+							on update cascade
+							deferrable,
+							foreign key(course_reques_to) references course(course_code)
+							on delete restrict
+							on update cascade
+							deferrable
+							);
+
+
+create table enrolled(student_id varchar(50),
+						course_code varchar(12),
+						term_code integer,
+						grade integer,
+						primary key(student_id, course_code, term_code),
+						foreign key(student_id) references students(student_id)
+						on delete restrict
+						on update cascade,
+						foreign key(term_code, course_code) references course_offerings(term_code, course_code)
+						on delete restrict
+						on update cascade,
+						check(grade>=0 and grade<=100)
+					);
+
+
+create function duplicate_course()
+returns trigger as
+$BODY$
+begin
+	if (select count(*)
+		from course
+		where course_code = new.course_code)>0
+	then	
+			return NULL;
+	end if;
+	return new;
+end
+$BODY$
+language plpgsql;
+
+create trigger duplicate_course_trigger
+	before insert on course
+	for each row
+	execute procedure duplicate_course();
+
+
+create function duplicate_student()
+returns trigger as
+$BODY$
+begin
+	if (select count(*)
+		from students
+		where student_id = new.student_id)>0
+	then	
+			return NULL;
+	end if;
+	return new;
+end
+$BODY$
+language plpgsql;
+
+create trigger duplicate_student_trigger
+	before insert on students
+	for each row
+	execute procedure duplicate_student();
+
+
+create function already_enrolled()
+returns trigger as
+$BODY$
+begin
+	if (select count(*)
+		from enrolled
+		where course_code = new.course_code and term_code = new.term_code and student_id = new.student_id)>0
+	then	
+			raise exception 'Problem: Student already enrolled';
+	end if;
+	return new;
+end
+$BODY$
+language plpgsql;
+
+create trigger already_enrolled_trigger
+	before insert on enrolled
+	for each row
+	execute procedure already_enrolled();
+
+
+
+create function prerequesites_have()
+returns trigger as
+$BODY$
+begin
+	if (select count(*) from (select course_reques_to
+		from prerequisites
+		where course_from = new.course_code
+		except
+		select course_code from enrolled where student_id = new.student_id and term_code < new.term_code and (grade>=50 or grade is null)) as X)>0
+	then		
+		raise exception 'Problem: Student Pre-requisites do not meet the criteria';
+	end if;
+	return new;
+end
+$BODY$
+language plpgsql;
+
+create trigger prerequisites_have_trigger
+	before insert on enrolled
+	for each row
+	execute procedure prerequesites_have();
+
+
+
+create function capacity()
+returns trigger as
+$BODY$
+begin
+	if (select count(*)
+		from course_offerings natural join enrolled
+		where course_code = new.course_code and term_code = new.term_code)
+			>=(select max_capacity from course_offerings where course_code = new.course_code and term_code = new.term_code)
+	then	
+			raise exception 'Problem: Course already at max capacity.';
+	end if;
+	return new;
+end
+$BODY$
+language plpgsql;
+
+create trigger capacity_trigger
+	before insert on enrolled
+	for each row
+	execute procedure capacity();
+
+
+
+create function grade_Assigned()
+returns trigger as
+$BODY$
+begin
+	if (select count(*)
+		from enrolled
+		where course_code = old.course_code and term_code = old.term_code and student_id = old.student_id and grade is not null)
+			>0
+	then	
+			raise exception 'Problem: course grade already given';
+	end if;
+	return new;
+end
+$BODY$
+language plpgsql;
+
+create trigger grade_Assigned_trigger
+	before delete on enrolled
+	for each row
+	execute procedure grade_Assigned();
+
+
+
